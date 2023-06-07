@@ -1,4 +1,5 @@
 
+
 #include"line.hpp"
 
 VideoCapture camera_open(){
@@ -83,7 +84,7 @@ double get_error(double num1, double num2){
     return num1-num2;
 }
 
-char follow_line(Dxl dxl,double error, bool findornot,bool *lineorpark, bool *detect_pront,double front_error,int front_mid_y,float *detect_threshold, bool *robot_st){
+char follow_line(Dxl dxl,double error, bool findornot,bool *lineorpark, bool *detect_pront,double front_error,int front_mid_y,float *detect_threshold, bool *robot_st,bool right_direction,bool hand_find){
    
     int rpwm,lpwm;
     double gain;
@@ -111,7 +112,15 @@ char follow_line(Dxl dxl,double error, bool findornot,bool *lineorpark, bool *de
         if(front_mid_y>330)key='s';
     }
     else{
-        if(findornot){rpwm=-10; lpwm=10; *lineorpark=false;}
+        if(findornot){
+            *lineorpark=false;
+            if(hand_find){
+                rpwm=0; lpwm=0;
+            }else{
+                if(right_direction==true){rpwm=-10; lpwm=10;}
+                else{rpwm=10; lpwm=-10;}
+            }
+        }
     }
     
     if(key=='q'){lpwm=0; rpwm=0;}
@@ -433,4 +442,113 @@ float get_retangle_Area(vector<Point2f> points,Point2f mid){
     else  area=0;
     cout<<"area"<<area<<endl;
     return area;
+}
+
+//아래 손 인식 관련 함수
+
+Mat detect_hand( Mat frame,Mat binary,Point2f *pt1,Point2f *pt2){
+    Mat img_labels, stats, centroids;
+
+    int numOfLables = connectedComponentsWithStats(binary, img_labels, stats, centroids, 8, CV_32S);
+    int big_num=1;
+    int big_value=0;
+    for (int j = 1; j < numOfLables; j++) {
+    int area = stats.at<int>(j, CC_STAT_AREA);
+    if((area>big_value)&&(area>3000)&&(area<30000)){big_value=area; big_num=j;}
+    }
+
+    int left = stats.at<int>(big_num, CC_STAT_LEFT);
+    int top = stats.at<int>(big_num, CC_STAT_TOP);
+    int width = stats.at<int>(big_num, CC_STAT_WIDTH);
+    int height = stats.at<int>(big_num, CC_STAT_HEIGHT);
+    rectangle( frame, Point(left, top), Point(left + width, top+ height),Scalar(0, 255, 0), 2);
+    rectangle( binary, Point(left, top), Point(left + width, top+ height),Scalar(125), 2);
+    *pt1=Point(left, top);
+    *pt2=Point(left + width, top+ height);
+
+    
+    // circle(frame, Point(x, 3*frame.rows/4+y), 5, Scalar(255,0,0), 2, 8);
+    // circle(binary, Point(x, y), 5, Scalar(125), 1, 8);
+
+    return frame;
+
+}
+Mat light_control_hand(Mat gray_Area){
+    Scalar avr=mean(gray_Area);
+
+    Mat light_roi;
+    light_roi=gray_Area+(125-avr[0]);
+
+    return light_roi;
+}
+Mat get_binary_hand(Mat light_roi){
+    int threshold=180;
+    Mat binary;
+    light_roi.copyTo(binary);
+    for(int j=0; j<light_roi.rows; j++){
+        for(int i=0; i<light_roi.cols; i++){
+            if(light_roi.at<uchar>(j,i)>threshold)
+                binary.at<uchar>(j,i)=255;
+            else
+                binary.at<uchar>(j,i)=0;
+        }
+    }
+    return binary;
+}
+
+Mat get_hand_roi(Net net,Mat frame,Point2f pt1,Point2f pt2,bool *hand_find,bool *right_direction, int *right_count,int *left_count){
+    vector<String> classNames = { "Right","Left" };
+    Mat ycrcb;
+    cvtColor(frame,ycrcb,COLOR_BGR2YCrCb);
+    Mat skin_mask;
+    inRange(ycrcb,Scalar(40,133,77),Scalar(150,173,127),skin_mask);
+    vector<vector<Point>> contours;
+    findContours(skin_mask,contours,RETR_EXTERNAL,CHAIN_APPROX_SIMPLE);
+    double max_cA=0;
+    int max_cn=-1;
+    for(unsigned int i=0; i<contours.size(); ++i){
+        double area=contourArea(contours[i]);
+        if(max_cA<area){
+            max_cA=area;
+            max_cn=i;
+        }
+    }
+    Mat contourimage=Mat::zeros(frame.size(),CV_8UC1);
+    if(max_cn>=0){
+    drawContours(contourimage,contours, max_cn,Scalar(255),FILLED);
+    }
+    Mat dst2;
+    frame.copyTo(dst2,contourimage);
+    Mat dst2_gray;
+    cvtColor(dst2,dst2_gray,COLOR_BGR2GRAY);
+
+    Mat light_roi=light_control_hand(dst2_gray); //이미지 밝기 조절 
+    Mat binary=get_binary_hand(light_roi); //이진화
+    Mat hand_detect=detect_hand(frame,binary,&pt1,&pt2); //라인 찾고 박스 그리고 중심점 반환
+    Mat img_roi_hand = frame(Rect(pt1,pt2));  // 손영역 추출
+
+    Mat inputBlob = blobFromImage(img_roi_hand, 1.0 / 127.5, Size(224, 224), Scalar(-1, -1, -1));
+    net.setInput(inputBlob);
+    Mat prob = net.forward();
+    // Check results & Display
+    double maxVal;
+    Point maxLoc;
+    minMaxLoc(prob, NULL, &maxVal, NULL, &maxLoc);
+    String str = classNames[maxLoc.x] + format("(%4.2lf%%)", maxVal *100);
+    putText(img_roi_hand, str, Point(10, 30), 3,1.3, Scalar(0,0,255));
+
+    if(maxVal *100>=70){
+        if(maxLoc.x==0)*right_count+=1;
+        else if(maxLoc.x==1)*left_count+=1;
+
+        if(*right_count>=50){
+            *hand_find=false;
+        }else if(*left_count>=50){
+            *hand_find=false;
+            *right_direction=false;
+        }
+        cout<<"우회전 스택" <<*right_count<<endl;
+        cout<<"좌회전 스택" <<*left_count<<endl;
+    } 
+    return frame;
 }
