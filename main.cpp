@@ -4,20 +4,21 @@ int main()
 {
  
     Dxl dxl;
-    Point2f pt1,pt2,pt3,pt4;
+    Point2f pt1,pt2,pt3,pt4,hand_pt1,hand_pt2;;
+    int right_count=0,left_count=0;
     //일반
-    //string src = "nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-    //string dst = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.62.58 port=8001 sync=false";
+    string src = "nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+    string dst = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.62.58 port=8001 sync=false";
 
-    //string src2 = "nvarguscamerasrc sensor-id=1 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-    //string dst2 = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.62.58 port=8002 sync=false";
+    string src2 = "nvarguscamerasrc sensor-id=1 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+    string dst2 = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.62.58 port=8002 sync=false";
     
     // pc실
-      string src = "nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-      string dst = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.58.164 port=8001 sync=false";
+    //   string src = "nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+    //   string dst = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.58.164 port=8001 sync=false";
 
-      string src2 = "nvarguscamerasrc sensor-id=1 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
-      string dst2 = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.58.164 port=8002 sync=false";
+    //   string src2 = "nvarguscamerasrc sensor-id=1 ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360, format=(string)NV12 ! nvvidconv flip-method=0 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink";
+    //   string dst2 = "appsrc ! videoconvert ! video/x-raw, format=BGRx ! nvvidconv ! nvv4l2h264enc insert-sps-pps=true ! h264parse ! rtph264pay pt=96 ! udpsink host=203.234.58.164 port=8002 sync=false";
 
     VideoCapture cap(src, CAP_GSTREAMER);
     VideoCapture cap2(src2, CAP_GSTREAMER);
@@ -29,10 +30,14 @@ int main()
     double diff1;
     double old_x,old_y;
     float detect_threshold=0.01;
-    bool findornot=false,lineorpark=true,detect_pront=false,robot_st=false;
+    bool findornot=false,lineorpark=true,hand_find=true,detect_pront=false,robot_st=false,right_direction=true;
 
     Mat frame;
     Mat frame2;
+
+    Net net = readNet("frozen_model.pb");
+	if (net.empty()) { cerr << "Network load failed!" << endl; return -1; }
+
    while(1){
 
     struct timeval start,end;
@@ -51,6 +56,10 @@ int main()
         error=get_error(frame.cols/2, line_x); // 라인에서 벗어난정도 반환
         writer<<frame;
     }else{
+        if(hand_find){
+        Mat hand_detect=get_hand_roi(net,frame,hand_pt1,hand_pt2,&hand_find,&right_direction,&right_count,&left_count);
+        writer<<frame;
+        }else{
         Mat front_park_roi=get_park_roi(frame); 
         Mat front_park_light_roi=park_area_light_control(front_park_roi); //이미지 밝기 조절 
         Mat front_park_binary=get_park_binary(front_park_light_roi);
@@ -73,9 +82,10 @@ int main()
         writer<<front_dst;
         front_mid_x=front_mid.x;
         front_mid_y=front_mid.y;
+        }
     }
     double front_error=get_error(frame.cols/2,front_mid_x );
-    key=follow_line(dxl,error,findornot,&lineorpark,&detect_pront,front_error,front_mid_y,&detect_threshold,&robot_st);
+    key=follow_line(dxl,error,findornot,&lineorpark,&detect_pront,front_error,front_mid_y,&detect_threshold,&robot_st,right_direction,hand_find);
 
 
     Mat park_roi=get_park_roi(frame2); 
@@ -111,7 +121,7 @@ int main()
  
     if (waitKey(2) == 27) key='q';
     if(key=='w')robot_st=false;
-    if(key=='s'){robot_st=true;lineorpark=true; findornot=false; detect_pront=false; key=' '; cout<<"주차 완료"<<endl;}
+    if(key=='s'){robot_st=true; lineorpark=true; findornot=false; detect_pront=false; hand_find=true; right_direction=true; key=' '; cout<<"주차 완료"<<endl;}
     if(key=='q')break;
     
     gettimeofday(&end,NULL); // 시간측정함수
